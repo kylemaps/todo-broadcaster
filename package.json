@@ -1,0 +1,13 @@
+{
+  "name": "broadcaster",
+  "version": "1.0.0",
+  "description": "NATS message broadcaster to Discord",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "nats": "^2.29.3",
+    "axios": "^1.7.2"
+  }
+}
