@@ -1,0 +1,80 @@
+name: CI - Build and Deploy Broadcaster
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+env:
+  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
+  IMAGE_NAME: broadcaster
+  CONFIG_REPO: kylemaps/todo-config
+  CONFIG_REPO_PATH: todo-config
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout App Source Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GKE_SA_KEY }}'
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker --quiet
+
+      - name: Build and Push Image to GCR
+        id: build_image
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            IMAGE_TAG=${GITHUB_REF#refs/tags/}
+          else
+            IMAGE_TAG="staging-${GITHUB_SHA::7}"
+          fi
+          echo "Building and pushing gcr.io/$PROJECT_ID/$IMAGE_NAME:$IMAGE_TAG"
+          docker build -t "gcr.io/$PROJECT_ID/$IMAGE_NAME:$IMAGE_TAG" .
+          docker push "gcr.io/$PROJECT_ID/$IMAGE_NAME:$IMAGE_TAG"
+          echo "::set-output name=image_tag::$IMAGE_TAG"
+
+      - name: Checkout Config Repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CONFIG_REPO }}
+          path: ${{ env.CONFIG_REPO_PATH }}
+          token: ${{ secrets.GH_PAT_90_D }}
+
+      - name: Set up Kustomize
+        uses: imranismail/setup-kustomize@v2.1.0
+
+      - name: Update Staging Config
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "Updating STAGING environment"
+          cd ${{ env.CONFIG_REPO_PATH }}/overlays/staging
+          kustomize edit set image broadcaster=gcr.io/$PROJECT_ID/$IMAGE_NAME:${{ steps.build_image.outputs.image_tag }}
+
+      - name: Update Production Config
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "Updating PRODUCTION environment"
+          cd ${{ env.CONFIG_REPO_PATH }}/overlays/production
+          kustomize edit set image broadcaster=gcr.io/$PROJECT_ID/$IMAGE_NAME:${{ steps.build_image.outputs.image_tag }}
+
+      - name: Commit and Push Changes
+        run: |
+          cd ${{ env.CONFIG_REPO_PATH }}
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add overlays/
+          git commit -m "CI: Update broadcaster image to ${{ steps.build_image.outputs.image_tag }}" || echo "No changes to commit"
+          git push
