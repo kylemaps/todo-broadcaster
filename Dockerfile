@@ -7,5 +7,4 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 COPY . .
-# Trigger new build with comment
 CMD ["npm", "start"]
